@@ -9,6 +9,9 @@ on:
   release:
     types: [published]
 
+permissions:
+  contents: write
+
 jobs:
   windows:
     runs-on: windows-2022
@@ -41,3 +44,24 @@ jobs:
           name: vst3-windows
           path: ${{ steps.find-vst3.outputs.plugin_path }}
           if-no-files-found: error
+
+      - name: Package VST3 bundle for release
+        if: github.event_name == 'release'
+        id: package-vst3
+        shell: pwsh
+        env:
+          PLUGIN_PATH: ${{ steps.find-vst3.outputs.plugin_path }}
+        run: |
+          $plugin = Get-Item -LiteralPath $env:PLUGIN_PATH
+          $archive = Join-Path $env:RUNNER_TEMP "$($plugin.Name).zip"
+          Compress-Archive -Path $plugin.FullName -DestinationPath $archive -Force
+          "release_asset=$archive" |
+            Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Attach VST3 to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.package-vst3.outputs.release_asset }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
