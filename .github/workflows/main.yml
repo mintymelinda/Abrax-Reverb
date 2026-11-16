@@ -1,22 +1,67 @@
 name: Build Windows VST3
+
 on:
   workflow_dispatch:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
 jobs:
   windows:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+
       - name: Configure
-        run: cmake -S ABRAX -B build -G "Visual Studio 17 2022" -A x64
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+
       - name: Build
-        run: cmake --build build --config Release --target ABRAX_VST3 --parallel 4
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Locate VST3 bundle
+        id: find-vst3
+        shell: pwsh
+        run: |
+          $plugin = Get-ChildItem -Path build -Filter '*.vst3' -Directory -Recurse |
+            Select-Object -First 1
+
+          if (-not $plugin) {
+            throw "No .vst3 bundle was produced under the build directory."
+          }
+
+          "plugin_path=$($plugin.FullName)" |
+            Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       - name: Upload VST3
         uses: actions/upload-artifact@v4
         with:
-          name: ABRAX-Windows-VST3
-          path: build/ABRAX_artefacts/Release/VST3/ABRAX.vst3/
+          name: vst3-windows
+          path: ${{ steps.find-vst3.outputs.plugin_path }}
           if-no-files-found: error
+
+      - name: Package VST3 bundle for release
+        if: github.event_name == 'release'
+        id: package-vst3
+        shell: pwsh
+        env:
+          PLUGIN_PATH: ${{ steps.find-vst3.outputs.plugin_path }}
+        run: |
+          $plugin = Get-Item -LiteralPath $env:PLUGIN_PATH
+          $archive = Join-Path $env:RUNNER_TEMP "$($plugin.Name).zip"
+          Compress-Archive -Path $plugin.FullName -DestinationPath $archive -Force
+          "release_asset=$archive" |
+            Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Attach VST3 to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.package-vst3.outputs.release_asset }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
